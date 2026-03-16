@@ -14,9 +14,13 @@ Behavior:
 """
 
 import argparse
+import io
 import sys
 import time
 from pathlib import Path
+
+from PIL import Image
+from PIL import PngImagePlugin
 
 
 # Resolve project root to import pipeline_service
@@ -27,6 +31,22 @@ if str(PIPELINE_ROOT) not in sys.path:
     sys.path.insert(0, str(PIPELINE_ROOT))
 
 from pipeline_service.modules.grid_renderer.render import GridViewRenderer  # type: ignore  # noqa: E402
+
+
+def png_bytes_for_windows(png_bytes: bytes) -> bytes:
+    """Re-encode PNG with sRGB chunk and optimize=False so Windows 11 Photos displays it correctly."""
+    img = Image.open(io.BytesIO(png_bytes))
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
+    pnginfo = PngImagePlugin.PngInfo()
+    try:
+        pnginfo.add(b"sRGB", b"\x00")  # rendering intent 0 = Perceptual
+    except TypeError:
+        pnginfo.add_chunk(b"sRGB", b"\x00")  # Pillow 10+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", pnginfo=pnginfo, optimize=False)
+    buf.seek(0)
+    return buf.read()
 
 
 def get_glb_files(folder: Path) -> list[Path]:
@@ -82,6 +102,7 @@ def process_once(renderer: GridViewRenderer, folder: Path) -> None:
             print(f"  Renderer returned no data for {glb_path}", file=sys.stderr)
             continue
 
+        png_bytes = png_bytes_for_windows(png_bytes)
         out_path.write_bytes(png_bytes)
         print(f"  -> wrote {len(png_bytes)} bytes to {out_path}")
 

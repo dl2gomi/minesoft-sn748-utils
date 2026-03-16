@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
+"""
+Upload .glb files in a folder to a Cloudflare R2 bucket using boto3 (S3-compatible API).
+Loads credentials from .env in the script directory.
+"""
 
 import argparse
-import mimetypes
 import os
 from pathlib import Path
 
-import requests
+import boto3
+from botocore.config import Config
+from dotenv import load_dotenv
 
 
 def iter_glb_files(root: Path):
@@ -14,26 +19,10 @@ def iter_glb_files(root: Path):
             yield path
 
 
-def upload_file(session: requests.Session, base_url: str, local_path: Path, prefix: str | None = None) -> None:
-    rel_path = local_path if not prefix else Path(prefix) / local_path
-    key = str(rel_path).replace("\\", "/")
-    url = f"{base_url.rstrip('/')}/{key.lstrip('/')}"
-
-    content_type, _ = mimetypes.guess_type(local_path.name)
-    headers = {}
-    if content_type:
-        headers["Content-Type"] = content_type
-
-    with local_path.open("rb") as f:
-        resp = session.put(url, data=f, headers=headers)
-    try:
-        resp.raise_for_status()
-    except requests.HTTPError as exc:
-        raise RuntimeError(f"Failed to upload {local_path} -> {url}: {exc} ({resp.status_code})") from exc
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Upload .glb files in a folder to a Cloudflare R2 bucket.")
+    parser = argparse.ArgumentParser(
+        description="Upload .glb files in a folder to a Cloudflare R2 bucket (boto3)."
+    )
     parser.add_argument(
         "folder",
         type=str,
@@ -43,37 +32,82 @@ def main() -> None:
         "--prefix",
         type=str,
         default="",
-        help="Optional key prefix inside the bucket (e.g. 'models/').",
+        help="Optional key prefix inside the bucket (e.g. 'results-r14/').",
     )
-
+    parser.add_argument(
+        "--bucket",
+        type=str,
+        default=None,
+        help="R2 bucket name (default: R2_BUCKET from .env).",
+    )
+    parser.add_argument(
+        "--env",
+        type=str,
+        default=None,
+        help="Path to .env file (default: script_dir/.env).",
+    )
     args = parser.parse_args()
+
+    # Load .env from script directory or --env path
+    env_path = args.env
+    if env_path is None:
+        env_path = Path(__file__).resolve().parent / ".env"
+    else:
+        env_path = Path(env_path).expanduser().resolve()
+    load_dotenv(env_path)
+
+    account_id = os.environ.get("ACCOUNT_ID")
+    access_key = os.environ.get("ACCESS_KEY_ID")
+    secret_key = os.environ.get("SECRET_ACCESS_KEY")
+    bucket = args.bucket or os.environ.get("R2_BUCKET")
+
+    if not account_id or not access_key or not secret_key:
+        raise SystemExit(
+            "Missing R2 credentials. Set ACCOUNT_ID, ACCESS_KEY_ID, SECRET_ACCESS_KEY in .env"
+        )
+    if not bucket:
+        raise SystemExit("Missing bucket. Set R2_BUCKET in .env or pass --bucket")
+
     root = Path(args.folder).expanduser().resolve()
     if not root.is_dir():
         raise SystemExit(f"Folder does not exist or is not a directory: {root}")
 
-    # Hardcoded public R2 bucket URL (change to your actual bucket URL).
-    # Example format for an R2 public bucket: https://<bucket-name>.<accountid>.r2.cloudflarestorage.com
-    R2_BASE_URL = "https://pub-00985933c1fd40cf9d10f6ba1352dce6.r2.dev"
-
-    session = requests.Session()
+    # S3-compatible client for R2
+    client = boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name="auto",
+        config=Config(signature_version="s3v4"),
+    )
 
     glb_files = list(iter_glb_files(root))
     if not glb_files:
         print(f"No .glb files found under {root}")
         return
 
-    print(f"Uploading {len(glb_files)} .glb files from {root} to {R2_BASE_URL} ...")
+    prefix = args.prefix.strip("/")
+    print(f"Uploading {len(glb_files)} .glb files from {root} to R2 bucket '{bucket}' ...")
 
     for path in glb_files:
         rel = path.relative_to(root)
-        key_prefix = args.prefix.strip("/")
-        key_rel = rel if not key_prefix else Path(key_prefix) / rel
-        print(f"- {rel} -> {key_rel}")
-        upload_file(session, R2_BASE_URL, path, prefix=key_prefix)
+        key = f"{prefix}/{rel}" if prefix else str(rel).replace("\\", "/")
+        key = key.lstrip("/")
+
+        # 404-gen-subnet CDN expects GLB as application/octet-stream
+        content_type = "application/octet-stream"
+
+        client.upload_file(
+            Filename=str(path),
+            Bucket=bucket,
+            Key=key,
+            ExtraArgs={"ContentType": content_type},
+        )
+        print(f"  {rel} -> s3://{bucket}/{key}")
 
     print("Done.")
 
 
 if __name__ == "__main__":
     main()
-
