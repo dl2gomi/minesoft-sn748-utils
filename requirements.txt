@@ -1,0 +1,7 @@
+loguru
+numpy
+Pillow
+PyOpenGL
+pyrender
+trimesh
+requests
