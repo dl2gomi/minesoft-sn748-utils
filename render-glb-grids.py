@@ -36,15 +36,24 @@ from pipeline_service.modules.grid_renderer.render import GridViewRenderer  # ty
 def png_bytes_for_windows(png_bytes: bytes) -> bytes:
     """Re-encode PNG with sRGB chunk and optimize=False so Windows 11 Photos displays it correctly."""
     img = Image.open(io.BytesIO(png_bytes))
+    # Ensure the underlying stream is fully read before re-encoding.
+    img.load()
+    img = img.copy()
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
     pnginfo = PngImagePlugin.PngInfo()
-    try:
-        pnginfo.add(b"sRGB", b"\x00")  # rendering intent 0 = Perceptual
-    except TypeError:
-        pnginfo.add_chunk(b"sRGB", b"\x00")  # Pillow 10+
+    # Write a real sRGB chunk (Windows Photos is picky about color chunks).
+    # PngInfo.add() is for textual chunks; we want a raw PNG chunk here.
+    if hasattr(pnginfo, "add_chunk"):
+        pnginfo.add_chunk(b"sRGB", b"\x00")  # rendering intent 0 = Perceptual
+    else:
+        # Older Pillow fallback: no add_chunk; just save without extra chunk.
+        pnginfo = None
     buf = io.BytesIO()
-    img.save(buf, format="PNG", pnginfo=pnginfo, optimize=False)
+    if pnginfo is not None:
+        img.save(buf, format="PNG", pnginfo=pnginfo, optimize=False)
+    else:
+        img.save(buf, format="PNG", optimize=False)
     buf.seek(0)
     return buf.read()
 

@@ -5,5 +5,9 @@ PyOpenGL
 pyrender
 trimesh
 requests
+httpx
+openai
+pydantic
+PyYAML
 boto3
 python-dotenv
