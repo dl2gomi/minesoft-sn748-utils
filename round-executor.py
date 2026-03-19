@@ -5,20 +5,18 @@ Requires the minesoft-sn748-beta1 pipeline service running on port 10006.
 
 from __future__ import annotations
 
+import argparse
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-BETA_DIR = SCRIPT_DIR.parent
-PROMPTS_DIR = BETA_DIR / "prompts-r13"
-MODELS_DIR = BETA_DIR / "models-r13"
 BASE_URL = "http://localhost:10006"
 GENERATE_ENDPOINT = f"{BASE_URL}/generate"
 TIMEOUT = 300
-SEED = 2340008971
 
 # Optional: restrict which prompt images to process.
 # List file stems (filenames without the .png extension). Leave empty to process all.
@@ -29,23 +27,57 @@ SEED = 2340008971
 TARGET_IMAGE_STEMS: list[str] = None
 
 
-def get_prompt_images(prompts_dir: Path) -> list[Path]:
-    """Return PNG images in prompts dir, optionally filtered by TARGET_IMAGE_STEMS."""
-    if not prompts_dir.is_dir():
-        raise FileNotFoundError(f"Prompts directory not found: {prompts_dir}")
+def _url_stem(image_url: str) -> str:
+    path = urlparse(image_url).path
+    name = Path(path).name
+    return Path(name).stem
 
-    all_images = sorted(prompts_dir.glob("*.png"))
 
-    if not TARGET_IMAGE_STEMS:
-        return all_images
+def fetch_prompt_urls(prompts_url: str) -> list[str]:
+    """Fetch newline-delimited prompt image URLs from remote text file."""
+    resp = requests.get(prompts_url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    urls = [line.strip() for line in resp.text.splitlines() if line.strip()]
+    if not urls:
+        raise ValueError(f"No prompt URLs found in: {prompts_url}")
+    return urls
 
-    target_set = set(TARGET_IMAGE_STEMS)
-    filtered = [p for p in all_images if p.stem in target_set]
 
-    missing = [stem for stem in TARGET_IMAGE_STEMS if (prompts_dir / f"{stem}.png") not in filtered]
+def select_urls(urls: list[str], start_index: int, end_index: int | None) -> list[str]:
+    """Select an inclusive index range from prompt URLs."""
+    if start_index < 0:
+        raise ValueError("start_index must be >= 0")
+    if end_index is not None and end_index < start_index:
+        raise ValueError("end_index must be >= start_index")
+    if start_index >= len(urls):
+        raise ValueError(f"start_index {start_index} is out of range for {len(urls)} prompts")
+    max_index = len(urls) - 1
+    if end_index is None:
+        effective_end = max_index
+    elif end_index > max_index:
+        print(
+            f"Warning: end_index {end_index} exceeds max index {max_index}; clamping to {max_index}.",
+            file=sys.stderr,
+        )
+        effective_end = max_index
+    else:
+        effective_end = end_index
+    return urls[start_index : effective_end + 1]
+
+
+def filter_urls_by_stems(urls: list[str], target_stems: list[str] | None) -> list[str]:
+    """Filter prompt URLs by file stem while preserving URL order."""
+    if not target_stems:
+        return urls
+    target_set = set(target_stems)
+    filtered = [u for u in urls if _url_stem(u) in target_set]
+    found = {_url_stem(u) for u in filtered}
+    missing = [stem for stem in target_stems if stem not in found]
     if missing:
-        print(f"Warning: the following target images were not found in {prompts_dir}: {', '.join(missing)}", file=sys.stderr)
-
+        print(
+            f"Warning: the following TARGET_IMAGE_STEMS were not found in prompt list: {', '.join(missing)}",
+            file=sys.stderr,
+        )
     return filtered
 
 
@@ -54,26 +86,33 @@ def _tsv(s: str) -> str:
     return (s or "").replace("\t", " ").strip()
 
 
-def generate_glb(image_path: Path, seed: int = -1):
-    """POST local image file to /generate and return (GLB bytes, response headers)."""
-    with image_path.open("rb") as f:
-        files = {"prompt_image_file": (image_path.name, f, "image/png")}
-        data = {"seed": seed}
-        resp = requests.post(GENERATE_ENDPOINT, files=files, data=data, timeout=TIMEOUT)
-        resp.raise_for_status()
-        return resp.content, resp.headers
+def generate_glb_from_url(image_url: str, seed: int = -1):
+    """Download prompt image URL and POST it to /generate."""
+    img_resp = requests.get(image_url, timeout=TIMEOUT)
+    img_resp.raise_for_status()
+    filename = Path(urlparse(image_url).path).name or "prompt.png"
+    files = {"prompt_image_file": (filename, img_resp.content, "image/png")}
+    data = {"seed": seed}
+    resp = requests.post(GENERATE_ENDPOINT, files=files, data=data, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.content, resp.headers
 
 
-def ensure_models_dir() -> None:
+def ensure_models_dir(models_dir: Path) -> None:
     """Create models directory if it does not exist."""
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
 
 
-def run_round() -> None:
-    """Process all PNG images from prompts dir, save GLBs to models dir, log to results.txt."""
-    ensure_models_dir()
-    images = get_prompt_images(PROMPTS_DIR)
-    results_path = MODELS_DIR / "results.csv"
+def run_round(prompts_url: str, start_index: int, end_index: int | None, seed: int, models_dir: Path) -> None:
+    """Process prompts from remote URL and save GLBs + results."""
+    if not prompts_url:
+        raise ValueError("--prompts is required")
+
+    ensure_models_dir(models_dir)
+    all_urls = fetch_prompt_urls(prompts_url)
+    ranged_urls = select_urls(all_urls, start_index, end_index)
+    selected_urls = filter_urls_by_stems(ranged_urls, TARGET_IMAGE_STEMS)
+    results_path = models_dir / "results.csv"
 
     try:
         r = requests.get(f"{BASE_URL}/health", timeout=5)
@@ -83,7 +122,10 @@ def run_round() -> None:
         print("Ensure pipeline service is running on port 10006.", file=sys.stderr)
         sys.exit(1)
 
-    total = len(images)
+    total = len(selected_urls)
+    if total == 0:
+        print("No prompts selected after filtering; nothing to run.", file=sys.stderr)
+        return
     header = (
         "filename\tstatus\tgeneration_time_s\tmultiview_used\tobject_category\tdecision_pipeline\tpipeline_used\t"
         "trellis_oom_retry\tdecision_explanation\tbytes\tuv_unwrap_mode\tuv_unwrap_reason\tuv_num_charts\t"
@@ -91,15 +133,16 @@ def run_round() -> None:
     )
     results_path.write_text(header, encoding="utf-8")
 
-    for idx, image_path in enumerate(images, start=1):
-        stem = image_path.stem
+    for idx, image_url in enumerate(selected_urls, start=1):
+        stem = _url_stem(image_url)
         glb_name = f"{stem}.glb"
-        glb_path = MODELS_DIR / glb_name
+        glb_path = models_dir / glb_name
         print(f"[{idx}/{total}] {stem} -> {glb_name}")
 
         try:
+            time.sleep(2)
             start = time.perf_counter()
-            glb_bytes, headers = generate_glb(image_path, seed=SEED)
+            glb_bytes, headers = generate_glb_from_url(image_url, seed=seed)
             elapsed = time.perf_counter() - start
         except requests.RequestException as e:
             print(f"  Error: {e}", file=sys.stderr)
@@ -141,5 +184,39 @@ def run_round() -> None:
     print(f"\nResults written to {results_path}")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run round generation from prompt URL list.")
+    parser.add_argument(
+        "output_models_dir",
+        type=Path,
+        help="Output directory for generated GLB files and results.csv.",
+    )
+    parser.add_argument(
+        "--prompts",
+        required=True,
+        help="URL to a text file with one prompt image URL per line.",
+    )
+    parser.add_argument(
+        "--start",
+        type=int,
+        required=True,
+        help="Start index (inclusive, zero-based).",
+    )
+    parser.add_argument(
+        "--end",
+        type=int,
+        required=True,
+        help="End index (inclusive).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        required=True,
+        help="Seed used by generation endpoint.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    run_round()
+    args = parse_args()
+    run_round(args.prompts, args.start, args.end, args.seed, args.output_models_dir)
