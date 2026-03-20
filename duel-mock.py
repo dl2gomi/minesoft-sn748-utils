@@ -303,8 +303,8 @@ def _as_png_bytes(path: Path) -> bytes:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Mock 404-gen duel stage against an opponent URL base or folder.")
     p.add_argument("--prompt-url", required=True, help="URL to prompts.txt containing one prompt image URL per line.")
-    p.add_argument("--models", required=True, help="Either (1) a models base URL or (2) a local folder path containing {stem}_views.png.")
-    p.add_argument("--opponent", required=True, help="Either a base URL for opponent PNGs (expects {base}/{stem}.png) or a local folder path containing {stem}.png.")
+    p.add_argument("--models", required=True, help="Either (1) a models base URL (expects {base}/{stem}.png) or (2) a local folder path containing {stem}_views.png.")
+    p.add_argument("--opponent", required=True, help="Either a base URL for opponent PNGs (expects {base}/{stem}.png) or a local folder path containing {stem}_views.png.")
     p.add_argument(
         "--config",
         default=str((Path(__file__).resolve().parent.parent / "minesoft-sn748-beta1" / "configuration.yaml").resolve()),
@@ -357,12 +357,12 @@ async def main_async() -> int:
 
         for idx, (stem, prompt_image_url) in enumerate(prompt_entries, start=1):
             opp_url = f"{opponent_base}/{stem}.png" if opponent_is_url else None
-            opp_path = (opponent_dir / f"{stem}.png") if opponent_dir is not None else None
+            opp_path = (opponent_dir / f"{stem}_views.png") if opponent_dir is not None else None
 
             try:
                 prompt_png = await _fetch_bytes(http_download, prompt_image_url, timeout_s=float(args.timeout))
                 if models_is_url:
-                    ours_url = f"{models_base}/{stem}_views.png"
+                    ours_url = f"{models_base}/{stem}.png"
                     ours_png = await _fetch_bytes(http_download, ours_url, timeout_s=float(args.timeout))
                 else:
                     assert models_dir is not None
