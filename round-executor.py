@@ -6,6 +6,7 @@ Requires the minesoft-sn748-beta1 pipeline service running on port 10006.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from pathlib import Path
@@ -25,6 +26,48 @@ TIMEOUT = 300
 #     "b6629bbf-fb79-4d78-b3ce-723c83e50230"
 # ]
 TARGET_IMAGE_STEMS: list[str] = None
+
+
+def _color(text: str, color: str) -> str:
+    codes = {"red": "31", "green": "32"}
+    code = codes.get(color)
+    if not code:
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+def _as_bool(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _pipeline_label(pipeline_used: str, decision_pipeline: str) -> str:
+    combined = f"{pipeline_used} {decision_pipeline}"
+    if re.search(r"1024", combined):
+        return _color("1024", "green")
+    if re.search(r"512", combined):
+        return _color("512", "red")
+    return (pipeline_used or decision_pipeline or "-").strip()
+
+
+def _multiview_label(multiview_used: str) -> str:
+    if _as_bool(multiview_used):
+        return _color("MULTI", "red")
+    return "SINGLE"
+
+
+def _oom_label(trellis_oom_retry: str) -> str:
+    if _as_bool(trellis_oom_retry):
+        return _color("OOM", "red")
+    return _color("MEM", "green")
+
+
+def _format_gen_time(gen_time: str, elapsed: float) -> str:
+    try:
+        value = float(gen_time)
+    except (TypeError, ValueError):
+        value = float(elapsed)
+    txt = f"{value:.2f}s"
+    return _color(txt, "red") if value > 100.0 else txt
 
 
 def _url_stem(image_url: str) -> str:
@@ -131,13 +174,14 @@ def run_round(prompts_url: str, start_index: int, end_index: int | None, seed: i
         "trellis_oom_retry\tdecision_explanation\tbytes\tuv_unwrap_mode\tuv_unwrap_reason\tuv_num_charts\t"
         "cluster_count\tduel_done\tduel_winner\tduel_explanation\n"
     )
-    results_path.write_text(header, encoding="utf-8")
+    if not results_path.exists() or results_path.stat().st_size == 0:
+        results_path.write_text(header, encoding="utf-8")
 
     for idx, image_url in enumerate(selected_urls, start=1):
         stem = _url_stem(image_url)
         glb_name = f"{stem}.glb"
         glb_path = models_dir / glb_name
-        print(f"[{idx}/{total}] {stem} -> {glb_name}")
+        print(f"[{idx}/{total}] {stem} ", end="", flush=True)
 
         try:
             time.sleep(2)
@@ -145,11 +189,13 @@ def run_round(prompts_url: str, start_index: int, end_index: int | None, seed: i
             glb_bytes, headers = generate_glb_from_url(image_url, seed=seed)
             elapsed = time.perf_counter() - start
         except requests.RequestException as e:
+            print("", flush=True)
             print(f"  Error: {e}", file=sys.stderr)
             with results_path.open("a", encoding="utf-8") as f:
                 f.write(f"{stem}\tERROR\t\t\t\t\t\t\t\t\t\t\t\t{e!s}\n")
             continue
         except Exception as e:
+            print("", flush=True)
             print(f"  Error: {e}", file=sys.stderr)
             with results_path.open("a", encoding="utf-8") as f:
                 f.write(f"{stem}\tERROR\t\t\t\t\t\t\t\t\t\t\t\t{e!s}\n")
@@ -179,7 +225,16 @@ def run_round(prompts_url: str, start_index: int, end_index: int | None, seed: i
                 f"{cluster_count}\t{duel_done}\t{duel_winner}\t{duel_explanation}\n"
             )
 
-        print(f"  -> {glb_path} ({len(glb_bytes)} bytes, {elapsed:.2f}s)")
+        gen_time_display = _format_gen_time(gen_time, elapsed)
+        size_mb = len(glb_bytes) / (1024 * 1024)
+        mv_label = _multiview_label(multiview_used)
+        pipe_label = _pipeline_label(pipeline_used, decision_pipeline)
+        oom_label = _oom_label(trellis_oom_retry)
+        category_label = (object_category or "-").strip()
+        cluster_label = (cluster_count or "-").strip()
+        duel_winner_label = (duel_winner or "-").strip()
+
+        print(f"| {gen_time_display} | {size_mb:.2f}MB | {mv_label} | {category_label} | {pipe_label} | {oom_label} | C{cluster_label} | D{duel_winner_label}")
 
     print(f"\nResults written to {results_path}")
 

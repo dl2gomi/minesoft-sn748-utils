@@ -5,7 +5,7 @@ from __future__ import annotations
 Mock the 404-gen-subnet DUELS stage locally.
 
 Inputs:
-- prompts folder containing prompt images and a prompts.txt
+- prompt URL containing newline-delimited prompt image URLs
 - models folder containing your model's renders as {stem}_views.png
 - opponent base URL such that {base_url}/{stem}.png is the opponent render (4-view grid)
 
@@ -31,6 +31,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
+import requests
 import yaml
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel
@@ -51,6 +52,15 @@ class DuelOutcome:
     issues: str
 
 
+def _color_tag(tag: str) -> str:
+    # Colorized tags for readable terminal logs.
+    if tag == "WIN":
+        return "\033[32mWIN\033[0m"
+    if tag == "LOSS":
+        return "\033[31mLOSS\033[0m"
+    return tag
+
+
 def _b64_png_data_url(png_bytes: bytes) -> str:
     b64 = base64.b64encode(png_bytes).decode("utf-8")
     return f"data:image/png;base64,{b64}"
@@ -69,34 +79,24 @@ def _stem_from_prompt_line(line: str) -> str:
     return Path(s).stem
 
 
-def _find_prompt_image(prompts_dir: Path, stem: str) -> Path | None:
-    # Prefer PNG
-    p = prompts_dir / f"{stem}.png"
-    if p.is_file():
-        return p
-    # Fall back: any common image extension
-    for ext in (".jpg", ".jpeg", ".webp", ".bmp"):
-        p2 = prompts_dir / f"{stem}{ext}"
-        if p2.is_file():
-            return p2
-    return None
+def _load_prompt_entries(prompt_url: str) -> list[tuple[str, str]]:
+    """Read prompt image URLs from a remote prompts.txt and return (stem, image_url)."""
+    r = requests.get(prompt_url, timeout=60)
+    r.raise_for_status()
+    lines = [line.strip() for line in r.text.splitlines() if line.strip()]
 
-
-def _load_stems(prompts_dir: Path) -> list[str]:
-    prompts_txt = prompts_dir / "prompts.txt"
-    if not prompts_txt.is_file():
-        raise FileNotFoundError(f"Missing prompts.txt in prompts folder: {prompts_txt}")
-    stems: list[str] = []
-    for line in prompts_txt.read_text(encoding="utf-8").splitlines():
+    entries: list[tuple[str, str]] = []
+    for line in lines:
         stem = _stem_from_prompt_line(line)
         if stem:
-            stems.append(stem)
+            entries.append((stem, line))
+
     # Keep order but drop duplicates
     seen: set[str] = set()
-    out: list[str] = []
-    for s in stems:
+    out: list[tuple[str, str]] = []
+    for s, u in entries:
         if s not in seen:
-            out.append(s)
+            out.append((s, u))
             seen.add(s)
     return out
 
@@ -302,7 +302,7 @@ def _as_png_bytes(path: Path) -> bytes:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Mock 404-gen duel stage against an opponent URL base.")
-    p.add_argument("--prompts-folder", required=True, help="Folder containing prompt images and prompts.txt.")
+    p.add_argument("--prompt-url", required=True, help="URL to prompts.txt containing one prompt image URL per line.")
     p.add_argument("--models-folder", required=True, help="Folder containing {stem}.glb and {stem}_views.png.")
     p.add_argument("--opponent-base-url", required=True, help="Base URL for opponent renders (expects {base}/{stem}.png).")
     p.add_argument(
@@ -318,23 +318,20 @@ def parse_args() -> argparse.Namespace:
 
 async def main_async() -> int:
     args = parse_args()
-    prompts_dir = Path(args.prompts_folder).expanduser().resolve()
     models_dir = Path(args.models_folder).expanduser().resolve()
     config_path = Path(args.config).expanduser().resolve()
 
-    if not prompts_dir.is_dir():
-        raise SystemExit(f"Prompts folder not found: {prompts_dir}")
     if not models_dir.is_dir():
         raise SystemExit(f"Models folder not found: {models_dir}")
     if not config_path.is_file():
         raise SystemExit(f"Config file not found: {config_path}")
 
-    stems = _load_stems(prompts_dir)
+    prompt_entries = _load_prompt_entries(args.prompt_url)
     if args.limit and args.limit > 0:
-        stems = stems[: int(args.limit)]
+        prompt_entries = prompt_entries[: int(args.limit)]
 
-    if not stems:
-        print("No prompts found in prompts.txt")
+    if not prompt_entries:
+        print("No prompts found from --prompt-url")
         return 2
 
     base_url, api_key, model_name = _load_vllm_config(config_path)
@@ -348,29 +345,22 @@ async def main_async() -> int:
     try:
         wins = losses = draws = 0
         outcomes: list[DuelOutcome] = []
-        win_stems: list[str] = []
-        loss_stems: list[str] = []
         draw_stems: list[str] = []
 
-        for idx, stem in enumerate(stems, start=1):
-            prompt_path = _find_prompt_image(prompts_dir, stem)
-            if prompt_path is None:
-                print(f"[{idx}/{len(stems)}] {stem}: missing prompt image in prompts folder; skip")
-                continue
-
+        for idx, (stem, prompt_image_url) in enumerate(prompt_entries, start=1):
             ours_path = models_dir / f"{stem}_views.png"
             if not ours_path.is_file():
-                print(f"[{idx}/{len(stems)}] {stem}: missing our views PNG: {ours_path.name}; skip")
+                print(f"[{idx}/{len(prompt_entries)}] {stem}: missing our views PNG: {ours_path.name}; skip")
                 continue
 
             opp_url = f"{opponent_base}/{stem}.png"
 
             try:
-                prompt_png = _as_png_bytes(prompt_path)
+                prompt_png = await _fetch_bytes(http_download, prompt_image_url, timeout_s=float(args.timeout))
                 ours_png = ours_path.read_bytes()
                 opp_png = await _fetch_bytes(http_download, opp_url, timeout_s=float(args.timeout))
             except Exception as e:
-                print(f"[{idx}/{len(stems)}] {stem}: failed to load inputs ({e}); skip")
+                print(f"[{idx}/{len(prompt_entries)}] {stem}: failed to load inputs ({e}); skip")
                 continue
 
             try:
@@ -383,7 +373,7 @@ async def main_async() -> int:
                     seed=int(args.seed),
                 )
             except Exception as e:
-                print(f"[{idx}/{len(stems)}] {stem}: judge failed ({e}); count as draw")
+                print(f"[{idx}/{len(prompt_entries)}] {stem}: judge failed ({e}); count as draw")
                 duel = DuelOutcome(stem=stem, outcome=0, left_penalty=0.0, right_penalty=0.0, issues="Internal error")
 
             duel = DuelOutcome(
@@ -398,21 +388,15 @@ async def main_async() -> int:
             if duel.outcome == -1:
                 wins += 1
                 tag = "WIN"
-                win_stems.append(stem)
             elif duel.outcome == 1:
                 losses += 1
                 tag = "LOSS"
-                loss_stems.append(stem)
             else:
                 draws += 1
                 tag = "DRAW"
                 draw_stems.append(stem)
 
-            print(
-                f"[{idx}/{len(stems)}] {stem}: {tag} "
-                f"(ours={duel.left_penalty:.1f} opp={duel.right_penalty:.1f}) "
-                f"| {duel.issues}"
-            )
+            print(f"[{idx}/{len(prompt_entries)}] {stem}: {_color_tag(tag)} | ours={duel.left_penalty:.1f} opp={duel.right_penalty:.1f}")
 
     finally:
         try:
@@ -432,17 +416,26 @@ async def main_async() -> int:
     print(f"| total  | {total:5d} |")
     print("+--------+-------+")
 
-    def _print_stems(title: str, stems: list[str]) -> None:
-        if not stems:
+    def _print_outcome_table(title: str, rows: list[DuelOutcome]) -> None:
+        if not rows:
             return
-        stems = list(stems)
-        stems.sort()
-        print(f"\n{title} ({len(stems)}):")
-        for s in stems:
-            print(f"  {s}")
+        rows_sorted = sorted(rows, key=lambda r: r.stem)
+        stem_w = max(len("stem"), max(len(r.stem) for r in rows_sorted))
+        reason_w = max(len("reason"), max(len((r.issues or "").strip() or "-") for r in rows_sorted))
+        sep = f"+-{'-' * stem_w}-+-{'-' * reason_w}-+"
+        print(f"\n{title} ({len(rows_sorted)}):")
+        print(sep)
+        print(f"| {'stem'.ljust(stem_w)} | {'reason'.ljust(reason_w)} |")
+        print(sep)
+        for r in rows_sorted:
+            reason = (r.issues or "").strip() or "-"
+            print(f"| {r.stem.ljust(stem_w)} | {reason.ljust(reason_w)} |")
+        print(sep)
 
-    _print_stems("WIN stems", win_stems)
-    _print_stems("LOSS stems", loss_stems)
+    win_rows = [o for o in outcomes if o.outcome == -1]
+    loss_rows = [o for o in outcomes if o.outcome == 1]
+    _print_outcome_table("WIN items", win_rows)
+    _print_outcome_table("LOSS items", loss_rows)
     return 0
 
 
