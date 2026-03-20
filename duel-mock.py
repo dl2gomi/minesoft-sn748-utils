@@ -301,10 +301,10 @@ def _as_png_bytes(path: Path) -> bytes:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Mock 404-gen duel stage against an opponent URL base.")
+    p = argparse.ArgumentParser(description="Mock 404-gen duel stage against an opponent URL base or folder.")
     p.add_argument("--prompt-url", required=True, help="URL to prompts.txt containing one prompt image URL per line.")
-    p.add_argument("--models-folder", required=True, help="Folder containing {stem}.glb and {stem}_views.png.")
-    p.add_argument("--opponent-base-url", required=True, help="Base URL for opponent renders (expects {base}/{stem}.png).")
+    p.add_argument("--models", required=True, help="Either (1) a models base URL or (2) a local folder path containing {stem}_views.png.")
+    p.add_argument("--opponent", required=True, help="Either a base URL for opponent PNGs (expects {base}/{stem}.png) or a local folder path containing {stem}.png.")
     p.add_argument(
         "--config",
         default=str((Path(__file__).resolve().parent.parent / "minesoft-sn748-beta1" / "configuration.yaml").resolve()),
@@ -318,10 +318,13 @@ def parse_args() -> argparse.Namespace:
 
 async def main_async() -> int:
     args = parse_args()
-    models_dir = Path(args.models_folder).expanduser().resolve()
     config_path = Path(args.config).expanduser().resolve()
 
-    if not models_dir.is_dir():
+    models_arg = str(args.models).strip()
+    models_is_url = "://" in models_arg
+    models_base = models_arg.rstrip("/") if models_is_url else ""
+    models_dir = None if models_is_url else Path(models_arg).expanduser().resolve()
+    if models_dir is not None and not models_dir.is_dir():
         raise SystemExit(f"Models folder not found: {models_dir}")
     if not config_path.is_file():
         raise SystemExit(f"Config file not found: {config_path}")
@@ -337,7 +340,12 @@ async def main_async() -> int:
     base_url, api_key, model_name = _load_vllm_config(config_path)
     print(f"Using vLLM judge: base_url={base_url} model={model_name}")
 
-    opponent_base = args.opponent_base_url.rstrip("/")
+    opponent_arg = str(args.opponent).strip()
+    opponent_is_url = "://" in opponent_arg
+    opponent_base = opponent_arg.rstrip("/") if opponent_is_url else ""
+    opponent_dir = None if opponent_is_url else Path(opponent_arg).expanduser().resolve()
+    if opponent_dir is not None and not opponent_dir.is_dir():
+        raise SystemExit(f"Opponent folder not found: {opponent_dir}")
 
     http_download = httpx.AsyncClient()
     http_vlm = httpx.AsyncClient(limits=httpx.Limits(max_keepalive_connections=10, max_connections=20))
@@ -348,17 +356,28 @@ async def main_async() -> int:
         draw_stems: list[str] = []
 
         for idx, (stem, prompt_image_url) in enumerate(prompt_entries, start=1):
-            ours_path = models_dir / f"{stem}_views.png"
-            if not ours_path.is_file():
-                print(f"[{idx}/{len(prompt_entries)}] {stem}: missing our views PNG: {ours_path.name}; skip")
-                continue
-
-            opp_url = f"{opponent_base}/{stem}.png"
+            opp_url = f"{opponent_base}/{stem}.png" if opponent_is_url else None
+            opp_path = (opponent_dir / f"{stem}.png") if opponent_dir is not None else None
 
             try:
                 prompt_png = await _fetch_bytes(http_download, prompt_image_url, timeout_s=float(args.timeout))
-                ours_png = ours_path.read_bytes()
-                opp_png = await _fetch_bytes(http_download, opp_url, timeout_s=float(args.timeout))
+                if models_is_url:
+                    ours_url = f"{models_base}/{stem}_views.png"
+                    ours_png = await _fetch_bytes(http_download, ours_url, timeout_s=float(args.timeout))
+                else:
+                    assert models_dir is not None
+                    ours_path = models_dir / f"{stem}_views.png"
+                    if not ours_path.is_file():
+                        print(
+                            f"[{idx}/{len(prompt_entries)}] {stem}: missing our views PNG: {ours_path.name}; skip"
+                        )
+                        continue
+                    ours_png = ours_path.read_bytes()
+                if opponent_is_url and opp_url is not None:
+                    opp_png = await _fetch_bytes(http_download, opp_url, timeout_s=float(args.timeout))
+                else:
+                    assert opp_path is not None
+                    opp_png = opp_path.read_bytes()
             except Exception as e:
                 print(f"[{idx}/{len(prompt_entries)}] {stem}: failed to load inputs ({e}); skip")
                 continue
