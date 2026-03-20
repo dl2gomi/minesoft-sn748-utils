@@ -416,26 +416,19 @@ async def main_async() -> int:
     print(f"| total  | {total:5d} |")
     print("+--------+-------+")
 
-    def _print_outcome_table(title: str, rows: list[DuelOutcome]) -> None:
-        if not rows:
-            return
-        rows_sorted = sorted(rows, key=lambda r: r.stem)
-        stem_w = max(len("stem"), max(len(r.stem) for r in rows_sorted))
-        reason_w = max(len("reason"), max(len((r.issues or "").strip() or "-") for r in rows_sorted))
-        sep = f"+-{'-' * stem_w}-+-{'-' * reason_w}-+"
-        print(f"\n{title} ({len(rows_sorted)}):")
-        print(sep)
-        print(f"| {'stem'.ljust(stem_w)} | {'reason'.ljust(reason_w)} |")
-        print(sep)
-        for r in rows_sorted:
-            reason = (r.issues or "").strip() or "-"
-            print(f"| {r.stem.ljust(stem_w)} | {reason.ljust(reason_w)} |")
-        print(sep)
+    win_stems = sorted(o.stem for o in outcomes if o.outcome == -1)
+    loss_stems = sorted(o.stem for o in outcomes if o.outcome == 1)
 
-    win_rows = [o for o in outcomes if o.outcome == -1]
-    loss_rows = [o for o in outcomes if o.outcome == 1]
-    _print_outcome_table("WIN items", win_rows)
-    _print_outcome_table("LOSS items", loss_rows)
+    if win_stems:
+        print(f"\nWIN items ({len(win_stems)}):")
+        for stem in win_stems:
+            print(stem)
+
+    if loss_stems:
+        print(f"\nLOSS items ({len(loss_stems)}):")
+        for stem in loss_stems:
+            print(stem)
+
     return 0
 
 
