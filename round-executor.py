@@ -21,16 +21,16 @@ TIMEOUT = 300
 
 # Optional: restrict which prompt images to process.
 # List file stems (filenames without the .png extension). Leave empty to process all.
-TARGET_IMAGE_STEMS: list[str] = [
-    "1abfc29e7a0d8c84c21d0cb21ece632633ac7e0e2da15ee488048596a603c492",
-    "6f93246350923b3a424e72125aa778bacf213fcceee3f48b8e9e5db805b0a234",
-    "9b1818e10aa75e7b38376e0e593878f8f9f20d4abc9cafe3855e0bfca6a79a73",
-    "87c4caa9f9a72bdc2d35342dcb1ea54d3501d5a891ac792a6c9bd2f2ce01d5ef",
-    "99e53f9593e159ad8d4684d8eb1e206ca6392e5c478cc9d59c9a9b3caba189e1",
-    "bc0a5105fd8f7973e647bf4bf05d075a54c4786240285100a1b2e248ae05afaa",
-    "f81184222c37baff3d531cafc41bb63d25a7c478be324f4ede2c176ff5d265e6",
-]
-# TARGET_IMAGE_STEMS: list[str] = None
+# TARGET_IMAGE_STEMS: list[str] = [
+#     "1abfc29e7a0d8c84c21d0cb21ece632633ac7e0e2da15ee488048596a603c492",
+#     "6f93246350923b3a424e72125aa778bacf213fcceee3f48b8e9e5db805b0a234",
+#     "9b1818e10aa75e7b38376e0e593878f8f9f20d4abc9cafe3855e0bfca6a79a73",
+#     "87c4caa9f9a72bdc2d35342dcb1ea54d3501d5a891ac792a6c9bd2f2ce01d5ef",
+#     "99e53f9593e159ad8d4684d8eb1e206ca6392e5c478cc9d59c9a9b3caba189e1",
+#     "bc0a5105fd8f7973e647bf4bf05d075a54c4786240285100a1b2e248ae05afaa",
+#     "f81184222c37baff3d531cafc41bb63d25a7c478be324f4ede2c176ff5d265e6",
+# ]
+TARGET_IMAGE_STEMS: list[str] = None
 
 
 def _color(text: str, color: str) -> str:
