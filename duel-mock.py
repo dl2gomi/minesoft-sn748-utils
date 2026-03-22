@@ -307,7 +307,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--opponent", required=True, help="Either a base URL for opponent PNGs (expects {base}/{stem}.png) or a local folder path containing {stem}_views.png.")
     p.add_argument(
         "--config",
-        default=str((Path(__file__).resolve().parent.parent / "minesoft-sn748-beta1" / "configuration.yaml").resolve()),
+        default=str((Path(__file__).resolve().parent.parent / "minesoft-sn748-beta2" / "configuration.yaml").resolve()),
         help="Path to configuration.yaml (used to read judge vLLM URL/model/key).",
     )
     p.add_argument("--seed", type=int, default=12345, help="Seed for judge calls (default: 12345).")

@@ -26,7 +26,7 @@ from PIL import PngImagePlugin
 # Resolve project root to import pipeline_service
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent
-PIPELINE_ROOT = ROOT_DIR / "minesoft-sn748-beta1"
+PIPELINE_ROOT = ROOT_DIR / "minesoft-sn748-beta2"
 if str(PIPELINE_ROOT) not in sys.path:
     sys.path.insert(0, str(PIPELINE_ROOT))
 
