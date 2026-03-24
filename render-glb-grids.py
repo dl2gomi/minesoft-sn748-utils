@@ -18,6 +18,7 @@ import io
 import sys
 import time
 from pathlib import Path
+import glob
 
 from PIL import Image
 from PIL import PngImagePlugin
@@ -26,11 +27,23 @@ from PIL import PngImagePlugin
 # Resolve project root to import pipeline_service
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent
-PIPELINE_ROOT = ROOT_DIR / "minesoft-sn748-beta2"
-if str(PIPELINE_ROOT) not in sys.path:
-    sys.path.insert(0, str(PIPELINE_ROOT))
+PIPELINE_ROOT = ROOT_DIR / "minesoft-sn748-beta3"
+PIPELINE_SERVICE_ROOT = PIPELINE_ROOT / "pipeline_service"
+for p in (PIPELINE_ROOT, PIPELINE_SERVICE_ROOT):
+    ps = str(p)
+    if ps not in sys.path:
+        sys.path.insert(0, ps)
+
+# Fallback: when running from scripts/.venv, reuse beta3 venv deps (torch, etc.).
+if PIPELINE_ROOT.exists():
+    py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    pattern = str(PIPELINE_ROOT / ".venv" / "lib" / py_ver / "site-packages")
+    for site_pkg in glob.glob(pattern):
+        if site_pkg not in sys.path:
+            sys.path.insert(0, site_pkg)
 
 from pipeline_service.modules.grid_renderer.render import GridViewRenderer  # type: ignore  # noqa: E402
+from pipeline_service.modules.grid_renderer.schemas import GridRendererInput  # type: ignore  # noqa: E402
 
 
 def png_bytes_for_windows(png_bytes: bytes) -> bytes:
@@ -66,7 +79,23 @@ def get_glb_files(folder: Path) -> list[Path]:
 
 def render_glb_to_grid(renderer: GridViewRenderer, glb_path: Path) -> bytes | None:
     glb_bytes = glb_path.read_bytes()
-    return renderer.grid_from_glb_bytes(glb_bytes)
+    # Current beta3 API
+    if hasattr(renderer, "render_grids"):
+        output = renderer.render_grids(GridRendererInput(glb_bytes=[glb_bytes]))
+        if output is None or not output.grids:
+            return None
+        from schemas.image_convertions import image_tensor_to_pil  # type: ignore  # noqa: E402
+
+        img = image_tensor_to_pil(output.grids[0])
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf.read()
+
+    # Backward-compatible fallback for older renderer API
+    if hasattr(renderer, "grid_from_glb_bytes"):
+        return renderer.grid_from_glb_bytes(glb_bytes)
+    return None
 
 
 def parse_args() -> argparse.Namespace:
