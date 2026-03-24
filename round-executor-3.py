@@ -3,6 +3,7 @@ Round executor v2 for minesoft-sn748-beta3.
 
 Logs useful metadata produced by beta3:
 - generation_time_s
+- qwen oom handling flags
 - trellis_oom_retry
 - trellis_pipeline_used
 - uv unwrap info (including cluster count)
@@ -23,8 +24,21 @@ import requests
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_URL = "http://localhost:10006"
 GENERATE_ENDPOINT = f"{BASE_URL}/generate"
-TIMEOUT = 300
-TARGET_IMAGE_STEMS: list[str] | None = None
+TIMEOUT = 600
+TARGET_IMAGE_STEMS: list[str] | None = [
+    "2c6b483bc91a8ead346aa63881d7632fbe4bd591805812a66b43ab061d4a0713",
+    "9f30ef4d02ceeee89b82f5f0e915b661e06141419011c324d02fd77d2e430207",
+    "656f560d-b1c9-48e8-be2c-32538ea41951",
+    "147195eb-8ee9-4dbb-8b2f-05ba0e407255",
+    "881813399585088358edb72604c5d4a53bc74f15a6647d4c6994f7c25a27d96b",
+    "bc0a5105fd8f7973e647bf4bf05d075a54c4786240285100a1b2e248ae05afaa",
+    "de03a6eac591342a7bf9bcabfaca542169e3385a0e59d04f2c2f8778f532973c",
+    "ec2fc36b0c2085ddffb1bea29047e7a5feaae66d9e3d5477e0548e243711e9b3",
+    "9001968b9cd166c2dc851fce93aea6e972488c3f27e938321d0566417ce4f720",
+    "54a0c4046dbeb298e8158e5be37e9e25586b5ec4ea0d4f5bca84ab31aad6a34e",
+    "9b1818e10aa75e7b38376e0e593878f8f9f20d4abc9cafe3855e0bfca6a79a73"
+]
+# TARGET_IMAGE_STEMS: list[str] | None = None
 
 
 def _color(text: str, color: str) -> str:
@@ -41,6 +55,14 @@ def _as_bool(value: str) -> bool:
 
 def _oom_label(trellis_oom_retry: str) -> str:
     return _color("OOM", "red") if _as_bool(trellis_oom_retry) else _color("MEM", "green")
+
+
+def _qwen_label(qwen_oom_retry: str, qwen_edit_skipped: str) -> str:
+    if _as_bool(qwen_edit_skipped):
+        return _color("Q-SKIP", "red")
+    if _as_bool(qwen_oom_retry):
+        return _color("Q-RETRY", "red")
+    return _color("Q-OK", "green")
 
 
 def _duel_label(duel_done: str, duel_winner: str) -> str:
@@ -148,7 +170,8 @@ def run_round(prompts_url: str, start_index: int, end_index: int | None, seed: i
         return
 
     header = (
-        "filename\tstatus\tgeneration_time_s\ttrellis_oom_retry\ttrellis_pipeline_used\t"
+        "filename\tstatus\tgeneration_time_s\tqwen_oom_retry\tqwen_edit_skipped\t"
+        "trellis_oom_retry\ttrellis_pipeline_used\t"
         "uv_unwrap_mode\tuv_unwrap_reason\tcluster_count\t"
         "duel_done\tduel_winner\tduel_explanation\tbytes\terror\n"
     )
@@ -182,6 +205,8 @@ def run_round(prompts_url: str, start_index: int, end_index: int | None, seed: i
         glb_path.write_bytes(glb_bytes)
 
         gen_time = headers.get("X-Generation-Time", "") or f"{elapsed:.3f}"
+        qwen_oom_retry = headers.get("X-Qwen-OOM-Retry", "")
+        qwen_edit_skipped = headers.get("X-Qwen-Edit-Skipped", "")
         trellis_oom_retry = headers.get("X-Trellis-OOM-Retry", "")
         trellis_pipeline_used = headers.get("X-Trellis-Pipeline-Used", "")
         uv_unwrap_mode = headers.get("X-UV-Unwrap-Mode", "")
@@ -193,18 +218,23 @@ def run_round(prompts_url: str, start_index: int, end_index: int | None, seed: i
 
         with results_path.open("a", encoding="utf-8") as f:
             f.write(
-                f"{stem}\tOK\t{gen_time}\t{trellis_oom_retry}\t{trellis_pipeline_used}\t"
+                f"{stem}\tOK\t{gen_time}\t{qwen_oom_retry}\t{qwen_edit_skipped}\t"
+                f"{trellis_oom_retry}\t{trellis_pipeline_used}\t"
                 f"{uv_unwrap_mode}\t{uv_unwrap_reason}\t{cluster_count}\t"
                 f"{duel_done}\t{duel_winner}\t{duel_explanation}\t{len(glb_bytes)}\t\n"
             )
 
         gen_time_display = _format_gen_time(gen_time, elapsed)
         size_mb = len(glb_bytes) / (1024 * 1024)
+        qwen_label = _qwen_label(qwen_oom_retry, qwen_edit_skipped)
         oom_label = _oom_label(trellis_oom_retry)
         pipe_label = (trellis_pipeline_used or "-").strip()
         duel_label = _duel_label(duel_done, duel_winner)
         cluster_label = (cluster_count or "-").strip()
-        print(f"| {gen_time_display} | {size_mb:.2f}MB | {pipe_label} | {oom_label} | C{cluster_label} | {duel_label}")
+        print(
+            f"| {gen_time_display} | {size_mb:.2f}MB | {qwen_label} | {pipe_label} | "
+            f"{oom_label} | C{cluster_label} | {duel_label}"
+        )
 
     print(f"\nResults written to {results_path}")
 
