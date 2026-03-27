@@ -25,20 +25,20 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_URL = "http://localhost:10006"
 GENERATE_ENDPOINT = f"{BASE_URL}/generate"
 TIMEOUT = 600
-TARGET_IMAGE_STEMS: list[str] | None = [
-    "2c6b483bc91a8ead346aa63881d7632fbe4bd591805812a66b43ab061d4a0713",
-    "9f30ef4d02ceeee89b82f5f0e915b661e06141419011c324d02fd77d2e430207",
-    "656f560d-b1c9-48e8-be2c-32538ea41951",
-    "147195eb-8ee9-4dbb-8b2f-05ba0e407255",
-    "881813399585088358edb72604c5d4a53bc74f15a6647d4c6994f7c25a27d96b",
-    "bc0a5105fd8f7973e647bf4bf05d075a54c4786240285100a1b2e248ae05afaa",
-    "de03a6eac591342a7bf9bcabfaca542169e3385a0e59d04f2c2f8778f532973c",
-    "ec2fc36b0c2085ddffb1bea29047e7a5feaae66d9e3d5477e0548e243711e9b3",
-    "9001968b9cd166c2dc851fce93aea6e972488c3f27e938321d0566417ce4f720",
-    "54a0c4046dbeb298e8158e5be37e9e25586b5ec4ea0d4f5bca84ab31aad6a34e",
-    "9b1818e10aa75e7b38376e0e593878f8f9f20d4abc9cafe3855e0bfca6a79a73"
-]
-# TARGET_IMAGE_STEMS: list[str] | None = None
+# TARGET_IMAGE_STEMS: list[str] | None = [
+#     "2c6b483bc91a8ead346aa63881d7632fbe4bd591805812a66b43ab061d4a0713",
+#     "9f30ef4d02ceeee89b82f5f0e915b661e06141419011c324d02fd77d2e430207",
+#     "656f560d-b1c9-48e8-be2c-32538ea41951",
+#     "147195eb-8ee9-4dbb-8b2f-05ba0e407255",
+#     "881813399585088358edb72604c5d4a53bc74f15a6647d4c6994f7c25a27d96b",
+#     "bc0a5105fd8f7973e647bf4bf05d075a54c4786240285100a1b2e248ae05afaa",
+#     "de03a6eac591342a7bf9bcabfaca542169e3385a0e59d04f2c2f8778f532973c",
+#     "ec2fc36b0c2085ddffb1bea29047e7a5feaae66d9e3d5477e0548e243711e9b3",
+#     "9001968b9cd166c2dc851fce93aea6e972488c3f27e938321d0566417ce4f720",
+#     "54a0c4046dbeb298e8158e5be37e9e25586b5ec4ea0d4f5bca84ab31aad6a34e",
+#     "9b1818e10aa75e7b38376e0e593878f8f9f20d4abc9cafe3855e0bfca6a79a73"
+# ]
+TARGET_IMAGE_STEMS: list[str] | None = None
 
 
 def _color(text: str, color: str) -> str:
